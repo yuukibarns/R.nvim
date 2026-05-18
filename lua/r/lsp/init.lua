@@ -196,7 +196,12 @@ local need_R_args = function(line, lnum)
 
     -- Check if the first object was piped
     local pobj = get_piped_obj(nline, nlnum)
-    if pobj then firstobj = pobj end
+    if pobj then
+        firstobj = pobj
+        if listdf == 2 then
+            firstobj2 = pobj
+        end
+    end
     local resp
     resp = {
         lib = lib,
