@@ -388,22 +388,37 @@ void finish_updating_loaded_libs(int has_new_lib) {
     sprintf(msg, "require('r.server').update_Rhelp_list('%s')", lib_names);
 
     char *p = lib_names;
+    LibList *tail = NULL;
+
     while (*p && *p != '#' && *p != '\n') {
         const char *nm = p;
         while (*p && *p != ',' && *p != '#')
             p++;
+
+        char saved = *p;
         *p = 0;
-        p++;
+        if (saved)
+            p++;
+
         PkgData *pkg = get_pkg(nm);
         if (pkg) {
             LibList *tmp = calloc(1, sizeof(LibList));
             tmp->pkg = pkg;
-            tmp->next = loaded_libs;
-            loaded_libs = tmp;
+            tmp->next = NULL;
+
+            if (loaded_libs == NULL) {
+                loaded_libs = tmp;
+                tail = tmp;
+            } else {
+                tail->next = tmp;
+                tail = tmp;
+            }
         }
+
+        if (!saved || saved == '#')
+            break;
     }
 
-    // Message to Neovim: Update Rhelp_list
     p = msg;
     while (*p) {
         if (*p == '#' || *p == '\n')

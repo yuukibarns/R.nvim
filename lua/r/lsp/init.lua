@@ -82,49 +82,75 @@ end
 ---@param line string
 ---@param lnum integer
 local get_first_obj = function(line, lnum)
-    -- The function with the same name in r.cursor has a different purpose.
-    -- r.cursor.get_first_obj: the cursor is expected to be over the function
-    -- r.lsp.get_first_obj: the cursor is expected to be between the parentheses.
-    local no
-    local piece
-    local funname
-    local firstobj
-    local pkg
-    no = 0
-    local op
-    op = string.byte("(")
-    local cp
-    cp = string.byte(")")
-    local idx
-    local col1 = false
-    repeat
-        idx = #line
-        while idx > 0 do
-            if line:byte(idx) == op then
-                no = no + 1
-            elseif line:byte(idx) == cp then
-                no = no - 1
-            end
-            if no == 1 then
-                -- The opening parenthesis is here. Now, get the function and
-                -- its first object (if in the same line)
-                piece = string.sub(line, 1, idx - 1)
-                funname = string.match(piece, ".-([%w%.:_]+)%s*$")
-                if funname then pkg = string.match(piece, ".-([%w%._]+)::" .. funname) end
-                piece = string.sub(line, idx + 1)
-                firstobj = string.match(piece, "%s-([%w%.%_]+)")
-                if funname then idx = string.find(line, funname) end
+    local bufnr = vim.api.nvim_get_current_buf()
+    local row = math.max(lnum - 1, 0)
+    local col = math.max(#line - 1, 0)
+
+    -- Prefer injected-language aware lookup
+    local node = vim.treesitter.get_node({
+        bufnr = bufnr,
+        pos = { row, col },
+        ignore_injections = false,
+    })
+
+    if not node then
+        return nil, nil, nil, line, lnum, nil
+    end
+
+    -- Walk up to enclosing call
+    local call_node = (node:type() == "call") and node or ast.find_ancestor(node, "call")
+    if not call_node then
+        return nil, nil, nil, line, lnum, nil
+    end
+
+    -- Function extraction
+    local fn_expr = call_node:field("function")[1]
+    if not fn_expr then
+        return nil, nil, nil, line, lnum, nil
+    end
+
+    local pkg, funname
+    local fn_text = vim.treesitter.get_node_text(fn_expr, bufnr)
+
+    if fn_expr:type() == "identifier" then
+        funname = fn_text
+    else
+        local p, f = fn_text:match("^([%w%._]+)%s*:::%s*([%w%._]+)$")
+        if not p then p, f = fn_text:match("^([%w%._]+)%s*::%s*([%w%._]+)$") end
+        if p and f then
+            pkg, funname = p, f
+        else
+            funname = fn_text and fn_text:match("([%w%._]+)%s*$") or nil
+        end
+    end
+
+    if not funname then
+        return nil, nil, nil, line, lnum, nil
+    end
+
+    -- First argument
+    local firstobj = nil
+    local args = call_node:field("arguments")[1]
+    if args then
+        for child in args:iter_children() do
+            if child:type() == "argument" then
+                local value = child:field("value")[1]
+                if value then
+                    local t = value:type()
+                    if t == "identifier" or t == "dots" or t == "subset" or t == "namespace_get" or t == "namespace_get_internal" then
+                        firstobj = vim.treesitter.get_node_text(value, bufnr)
+                    end
+                end
                 break
             end
-            idx = idx - 1
         end
-        if funname then break end
-        if line:find("^%S") then col1 = true end
-        lnum = lnum - 1
-        if lnum == 0 then break end
-        line = vim.api.nvim_buf_get_lines(0, lnum - 1, lnum, true)[1]
-    until col1
-    return pkg, funname, firstobj, line, lnum, idx
+    end
+
+    -- Compatibility return values
+    local sr, sc = call_node:start()
+    local call_line = vim.api.nvim_buf_get_lines(bufnr, sr, sr + 1, true)[1] or line
+
+    return pkg, funname, firstobj, call_line, sr + 1, sc
 end
 
 ---Check if we need to complete function arguments

@@ -67,7 +67,9 @@ static char *find_obj(char *objls, const char *dfbase) {
 
 static char *get_df_cols(const char *dtfrm, const char *base, char *p) {
     size_t skip = strlen(dtfrm) + 1; // The data.frame name + "$"
+    char dfprefix[64];
     char dfbase[64];
+    snprintf(dfprefix, sizeof(dfprefix), "%s$", dtfrm);
     snprintf(dfbase, 63, "%s$%s", dtfrm, base ? base : "");
     const char *s = NULL;
 
@@ -89,20 +91,23 @@ static char *get_df_cols(const char *dtfrm, const char *base, char *p) {
     if (!s)
         return p;
 
-    while (*s && str_here(s, dfbase)) {
-        // Avoid buffer overflow if the information is bigger than
-        // cmp_buf.
-        size_t nsz = strlen(s) + 1024 + (p - cmp_buf);
-        if (cmp_buf_sz < nsz)
-            p = grow_buffer(&cmp_buf, &cmp_buf_sz, nsz - cmp_buf_sz + 32768);
+    while (*s && str_here(s, dfprefix)) {
+        if (str_here(s, dfbase)) {
+            // Avoid buffer overflow if the information is bigger than
+            // cmp_buf.
+            size_t nsz = strlen(s) + 1024 + (p - cmp_buf);
+            if (cmp_buf_sz < nsz)
+                p = grow_buffer(&cmp_buf, &cmp_buf_sz,
+                                nsz - cmp_buf_sz + 32768);
 
-        p = str_cat(p, "{\"label\":\"");
-        p = str_cat(p, s + skip);
-        p = str_cat(p, "\",\"sortText\":\"_");
-        p = str_cat(p, s + skip);
-        p = str_cat(p, "\",\"cls\":\"c\",\"kind\":5,\"env\":\"");
-        p = str_cat(p, dtfrm);
-        p = str_cat(p, "\"},");
+            p = str_cat(p, "{\"label\":\"");
+            p = str_cat(p, s + skip);
+            p = str_cat(p, "\",\"sortText\":\"_");
+            p = str_cat(p, s + skip);
+            p = str_cat(p, "\",\"cls\":\"c\",\"kind\":5,\"env\":\"");
+            p = str_cat(p, dtfrm);
+            p = str_cat(p, "\"},");
+        }
 
         while (*s != '\n')
             s++;
