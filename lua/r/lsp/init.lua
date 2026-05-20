@@ -78,7 +78,10 @@ get_piped_obj = function(line, lnum)
     return nil
 end
 
----Return first argument of function
+---Return first data object of function call.
+---Priority:
+---  1) named argument `data = <obj>`
+---  2) first positional argument
 ---@param line string
 ---@param lnum integer
 local get_first_obj = function(line, lnum)
@@ -128,21 +131,61 @@ local get_first_obj = function(line, lnum)
         return nil, nil, nil, line, lnum, nil
     end
 
-    -- First argument
+    local function extract_obj_from_value(value_node)
+        if not value_node then return nil end
+        local t = value_node:type()
+        if t == "identifier"
+            or t == "dots"
+            or t == "subset"
+            or t == "namespace_get"
+            or t == "namespace_get_internal" then
+            return vim.treesitter.get_node_text(value_node, bufnr)
+        end
+        return nil
+    end
+
+    -- NEW: argument-name completion allowed?
+    -- "1" => suggest argument names (default)
+    -- "0" => do not suggest argument names (already has '=')
+    local argname_ok = "1"
+    local arg_node = (node:type() == "argument") and node or ast.find_ancestor(node, "argument")
+    if arg_node then
+        local arg_text = vim.treesitter.get_node_text(arg_node, bufnr) or ""
+        argname_ok = arg_text:find("=", 1, true) and "0" or "1"
+    end
+
     local firstobj = nil
     local args = call_node:field("arguments")[1]
     if args then
+        local first_positional_value = nil
+
         for child in args:iter_children() do
             if child:type() == "argument" then
-                local value = child:field("value")[1]
-                if value then
-                    local t = value:type()
-                    if t == "identifier" or t == "dots" or t == "subset" or t == "namespace_get" or t == "namespace_get_internal" then
-                        firstobj = vim.treesitter.get_node_text(value, bufnr)
+                local name_node = child:field("name")[1]
+                local value_node = child:field("value")[1]
+
+                -- Save first positional argument as fallback
+                if not name_node and not first_positional_value then
+                    first_positional_value = value_node
+                end
+
+                -- Prefer named data=
+                if name_node and value_node then
+                    local arg_name = vim.treesitter.get_node_text(name_node, bufnr)
+                    if arg_name == "data" then
+                        local data_obj = extract_obj_from_value(value_node)
+                        if data_obj then
+                            firstobj = data_obj
+                            break
+                        end
                     end
                 end
-                break
             end
+        end
+
+        -- Fallback to first positional arg
+        if not firstobj and first_positional_value then
+            firstobj = extract_obj_from_value(first_positional_value)
         end
     end
 
@@ -150,7 +193,7 @@ local get_first_obj = function(line, lnum)
     local sr, sc = call_node:start()
     local call_line = vim.api.nvim_buf_get_lines(bufnr, sr, sr + 1, true)[1] or line
 
-    return pkg, funname, firstobj, call_line, sr + 1, sc
+    return pkg, funname, firstobj, call_line, sr + 1, sc, argname_ok
 end
 
 ---Check if we need to complete function arguments
@@ -166,7 +209,8 @@ local need_R_args = function(line, lnum)
     local nlnum = nil
     local cnum = nil
     local lib = nil
-    lib, funname, firstobj, nline, nlnum, cnum = get_first_obj(line, lnum + 1)
+    local argname_ok = nil
+    lib, funname, firstobj, nline, nlnum, cnum, argname_ok = get_first_obj(line, lnum + 1)
 
     -- Save original nlnum for formula search (before fun_data_2 modifies it)
     local orig_nlnum = nlnum
@@ -188,7 +232,7 @@ local need_R_args = function(line, lnum)
             for k, v in pairs(options.fun_data_2) do
                 for _, a in pairs(v) do
                     if a == "*" or funname == a then
-                        _, funname2, firstobj2, nline, nlnum, _ =
+                        _, funname2, firstobj2, nline, nlnum, _, _ =
                             get_first_obj(nline, nlnum)
                         if funname2 == k then
                             firstobj = firstobj2
@@ -237,6 +281,7 @@ local need_R_args = function(line, lnum)
         listdf = listdf,
         firstobj2 = firstobj2,
         pobj = pobj,
+        argname_ok = argname_ok,
     }
     return resp
 end
@@ -525,7 +570,9 @@ function M.complete(req_id, lnum, cnum)
                         end
                     end
                 end
+                if nra.argname_ok then msg = msg .. ", argname_ok = '" .. nra.argname_ok .. "'" end
                 msg = msg .. ")"
+                vim.notify(msg)
                 send_to_nvimcom("E", msg)
             else
                 if nra.listdf then

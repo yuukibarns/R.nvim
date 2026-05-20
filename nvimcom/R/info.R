@@ -319,7 +319,7 @@ send_definition <- function(req_id, pkg, symbol) {
     return(invisible(NULL))
 }
 
-get_method <- function(req_id, fnm, fstobj, wrd = NULL, lib = NULL, df = NULL) {
+get_method <- function(req_id, fnm, fstobj, wrd = NULL, lib = NULL, df = NULL, argname_ok = NULL) {
     fname <- fnm
     if (exists(fnm) && !is.null(fobj <- get0(fstobj, envir = .GlobalEnv))) {
         sm <- get_methods(fnm)
@@ -334,6 +334,9 @@ get_method <- function(req_id, fnm, fstobj, wrd = NULL, lib = NULL, df = NULL) {
     }
     if (!is.null(df)) {
         msg <- paste0(msg, ',"df":"', df, '"')
+    }
+    if (!is.null(argname_ok)) {
+        msg <- paste0(msg, ',"argname_ok":"', argname_ok, '"')
     }
     .C(nvimcom_msg_to_nvim, paste0(msg, "}"))
 }

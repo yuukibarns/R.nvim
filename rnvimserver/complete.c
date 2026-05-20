@@ -102,7 +102,7 @@ static char *get_df_cols(const char *dtfrm, const char *base, char *p) {
 
             p = str_cat(p, "{\"label\":\"");
             p = str_cat(p, s + skip);
-            p = str_cat(p, "\",\"sortText\":\"_");
+            p = str_cat(p, "\",\"sortText\":\"01_col_");
             p = str_cat(p, s + skip);
             p = str_cat(p, "\",\"cls\":\"c\",\"kind\":5,\"env\":\"");
             p = str_cat(p, dtfrm);
@@ -165,7 +165,7 @@ static char *parse_objls(const char *s, const char *base, const char *pkg,
                 p = str_cat(p, "::");
             }
             p = str_cat(p, f[0]);
-            p = str_cat(p, "\",\"sortText\":\"");
+            p = str_cat(p, "\",\"sortText\":\"10_");
             snprintf(order, 3, "%02d", z);
             p = str_cat(p, order);
             if (pkg) {
@@ -223,7 +223,7 @@ static char *complete_args(char *p, const char *s, const char *funcnm,
             }
             p = str_cat(p, b);
             free(b);
-            p = str_cat(p, " = \",\"sortText\":\"_");
+            p = str_cat(p, " = \",\"sortText\":\"00_arg_");
             o++;
             snprintf(order, 15, "%02d", o);
             p = str_cat(p, order);
@@ -304,11 +304,13 @@ void complete(const char *params) {
     char *base = strstr(params, "\"base\":\"");
     char *fnm = strstr(params, "\"fnm\":\"");
     char *df = strstr(params, "\"df\":\"");
+    char *argname_ok = strstr(params, "\"argname_ok\":\"");
     char *fargs = strstr(params, "\"fargs\":\"");
     cut_json_int(&id, 10);
     cut_json_str(&base, 8);
     cut_json_str(&fnm, 7);
     cut_json_str(&df, 6);
+    cut_json_str(&argname_ok, 14);
     cut_json_str(&fargs, 9);
     if (base && *base == ' ')
         base = NULL;
@@ -342,7 +344,11 @@ void complete(const char *params) {
                 }
             }
 
-            if (!s)
+            int argname_ok_i = 0;
+            if (argname_ok && *argname_ok == '1')
+                argname_ok_i = 1;
+
+            if (!s && argname_ok_i)
                 p = seek_fun_complete_args(p, fnm);
 
             // Add columns of a data.frame
