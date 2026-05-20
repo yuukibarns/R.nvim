@@ -100,8 +100,13 @@ local get_first_obj = function(line, lnum)
         return nil, nil, nil, line, lnum, nil
     end
 
-    -- Walk up to enclosing call
-    local call_node = (node:type() == "call") and node or ast.find_ancestor(node, "call")
+    -- Walk up to enclosing call OR subset (e.g. dt[...])
+    local call_node
+    if node:type() == "call" or node:type() == "subset" then
+        call_node = node
+    else
+        call_node = ast.find_ancestor(node, "call") or ast.find_ancestor(node, "subset")
+    end
     if not call_node then
         return nil, nil, nil, line, lnum, nil
     end
@@ -152,6 +157,14 @@ local get_first_obj = function(line, lnum)
     if arg_node then
         local arg_text = vim.treesitter.get_node_text(arg_node, bufnr) or ""
         argname_ok = arg_text:find("=", 1, true) and "0" or "1"
+    end
+
+    -- Special case: subset syntax dt[...] => firstobj is function field ("dt")
+    if call_node:type() == "subset" then
+        local sr, sc = call_node:start()
+        local call_line = vim.api.nvim_buf_get_lines(bufnr, sr, sr + 1, true)[1] or line
+        local firstobj = extract_obj_from_value(fn_expr) or fn_text
+        return nil, "data.table", firstobj, call_line, sr + 1, sc, argname_ok
     end
 
     local firstobj = nil
