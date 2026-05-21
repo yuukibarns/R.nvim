@@ -23,11 +23,15 @@ local get_piped_obj
 ---@return string | nil The dataframe name if found
 local function find_ggplot_dataframe(parent_fn, lnum)
     local bufnr = vim.api.nvim_get_current_buf()
+    local row = math.max(lnum - 1, 0)
+    local col = 0
 
-    local parser, _ = ast.get_parser_and_root(bufnr, "r")
-    if not parser then return nil end
-
-    local node = ast.node_at_position(bufnr, lnum - 1, 0)
+    -- Prefer injected-language aware lookup
+    local node = vim.treesitter.get_node({
+        bufnr = bufnr,
+        pos = { row, col },
+        ignore_injections = false,
+    })
     if not node then return nil end
 
     -- Walk up the tree to find the binary_operator chain (ggplot + layers)
@@ -585,7 +589,6 @@ function M.complete(req_id, lnum, cnum)
                 end
                 if nra.argname_ok then msg = msg .. ", argname_ok = '" .. nra.argname_ok .. "'" end
                 msg = msg .. ")"
-                vim.notify(msg)
                 send_to_nvimcom("E", msg)
             else
                 if nra.listdf then
