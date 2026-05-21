@@ -118,6 +118,21 @@ function M.get_children_of_type(node, child_type)
     return children
 end
 
+---@param value_node TSNode
+---@param bufnr integer
+function M.extract_obj_from_value(value_node, bufnr)
+    if not value_node then return nil end
+    local t = value_node:type()
+    if t == "identifier"
+        or t == "dots"
+        or t == "subset"
+        or t == "namespace_get"
+        or t == "namespace_get_internal" then
+        return vim.treesitter.get_node_text(value_node, bufnr)
+    end
+    return nil
+end
+
 --- Extract first argument from call node using tree-sitter query
 ---@param bufnr integer Buffer number
 ---@param call_node TSNode Call node
@@ -135,27 +150,43 @@ function M.get_first_call_argument(bufnr, call_node)
 
     local arguments = args_nodes[1]
 
+    local firstobj = nil
+    local first_positional_value = nil
+
     -- Get first argument
     for child in arguments:iter_children() do
         if child:type() == "argument" then
             -- Get the value of the argument
-            for arg_child in child:iter_children() do
-                if arg_child:named() and arg_child:type() ~= "identifier" then
-                    -- Skip calls and complex expressions
-                    if arg_child:type() == "call" then
-                        return nil
+            if child:type() == "argument" then
+                local name_node = child:field("name")[1]
+                local value_node = child:field("value")[1]
+
+                -- Save first positional argument as fallback
+                if not name_node and not first_positional_value then
+                    first_positional_value = value_node
+                end
+
+                -- Prefer named data=
+                if name_node and value_node then
+                    local arg_name = vim.treesitter.get_node_text(name_node, bufnr)
+                    if arg_name == "data" then
+                        local data_obj = M.extract_obj_from_value(value_node, bufnr)
+                        if data_obj then
+                            firstobj = data_obj
+                            break
+                        end
                     end
-                    if arg_child:type() == "identifier" then
-                        return vim.treesitter.get_node_text(arg_child, bufnr)
-                    end
-                elseif arg_child:type() == "identifier" then
-                    return vim.treesitter.get_node_text(arg_child, bufnr)
                 end
             end
         end
     end
 
-    return nil
+    -- Fallback to first positional arg
+    if not firstobj and first_positional_value then
+        firstobj = M.extract_obj_from_value(first_positional_value, bufnr)
+    end
+
+    return firstobj
 end
 
 --- Find call to specific function in binary chain

@@ -140,19 +140,6 @@ local get_first_obj = function(line, lnum)
         return nil, nil, nil, line, lnum, nil
     end
 
-    local function extract_obj_from_value(value_node)
-        if not value_node then return nil end
-        local t = value_node:type()
-        if t == "identifier"
-            or t == "dots"
-            or t == "subset"
-            or t == "namespace_get"
-            or t == "namespace_get_internal" then
-            return vim.treesitter.get_node_text(value_node, bufnr)
-        end
-        return nil
-    end
-
     -- "1" => suggest argument names
     -- "0" => do not suggest argument names
     local last_comma = line:find(",[^,]*$") or 0
@@ -166,44 +153,11 @@ local get_first_obj = function(line, lnum)
     if call_node:type() == "subset" then
         local sr, sc = call_node:start()
         local call_line = vim.api.nvim_buf_get_lines(bufnr, sr, sr + 1, true)[1] or line
-        local firstobj = extract_obj_from_value(fn_expr) or fn_text
+        local firstobj = ast.extract_obj_from_value(fn_expr, bufnr) or fn_text
         return nil, "data.table", firstobj, call_line, sr + 1, sc, argname_ok
     end
 
-    local firstobj = nil
-    local args = call_node:field("arguments")[1]
-    if args then
-        local first_positional_value = nil
-
-        for child in args:iter_children() do
-            if child:type() == "argument" then
-                local name_node = child:field("name")[1]
-                local value_node = child:field("value")[1]
-
-                -- Save first positional argument as fallback
-                if not name_node and not first_positional_value then
-                    first_positional_value = value_node
-                end
-
-                -- Prefer named data=
-                if name_node and value_node then
-                    local arg_name = vim.treesitter.get_node_text(name_node, bufnr)
-                    if arg_name == "data" then
-                        local data_obj = extract_obj_from_value(value_node)
-                        if data_obj then
-                            firstobj = data_obj
-                            break
-                        end
-                    end
-                end
-            end
-        end
-
-        -- Fallback to first positional arg
-        if not firstobj and first_positional_value then
-            firstobj = extract_obj_from_value(first_positional_value)
-        end
-    end
+    local firstobj = ast.get_first_call_argument(bufnr, call_node)
 
     -- Compatibility return values
     local sr, sc = call_node:start()
