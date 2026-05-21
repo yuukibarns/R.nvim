@@ -153,15 +153,14 @@ local get_first_obj = function(line, lnum)
         return nil
     end
 
-    -- NEW: argument-name completion allowed?
-    -- "1" => suggest argument names (default)
-    -- "0" => do not suggest argument names (already has '=')
-    local argname_ok = "1"
-    local arg_node = (node:type() == "argument") and node or ast.find_ancestor(node, "argument")
-    if arg_node then
-        local arg_text = vim.treesitter.get_node_text(arg_node, bufnr) or ""
-        argname_ok = arg_text:find("=", 1, true) and "0" or "1"
-    end
+    -- "1" => suggest argument names
+    -- "0" => do not suggest argument names
+    local last_comma = line:find(",[^,]*$") or 0
+    local last_equal = line:find("=[^=]*$") or 0
+    local last_bracket = line:find("%([^(]*$") or 0
+
+    local argname_ok = (last_equal > last_comma and last_equal > last_bracket) and "0" or "1"
+
 
     -- Special case: subset syntax dt[...] => firstobj is function field ("dt")
     if call_node:type() == "subset" then
