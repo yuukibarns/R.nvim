@@ -192,18 +192,17 @@ local need_R_args = function(line, lnum)
         if not listdf then
             local call_node2 = ast.find_ancestor(call_node, { "call", "subset" })
             if call_node2 then
-                for k, v in pairs(options.fun_data_2) do
+                _, funname2 = get_pkg_and_funname(call_node2, bufnr)
+                local v = options.fun_data_2[funname2]
+                if v then
                     for _, a in pairs(v) do
                         if a == "*" or funname == a then
-                            _, funname2 = get_pkg_and_funname(call_node2, bufnr)
-                            if funname2 == k then
-                                local df = find_call_dataframe(call_node2, bufnr)
-                                if df then
-                                    firstobj2 = df
-                                    firstobj = firstobj2
-                                    listdf = 2
-                                    break
-                                end
+                            local df = find_call_dataframe(call_node2, bufnr)
+                            if df then
+                                firstobj2 = df
+                                firstobj = firstobj2
+                                listdf = 2
+                                break
                             end
                         end
                     end
