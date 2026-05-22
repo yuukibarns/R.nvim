@@ -174,6 +174,19 @@ local need_R_args = function(line, lnum)
     end
     if not call_node then return end
 
+    if call_node:type() == "subset" then
+        firstobj = find_call_dataframe(call_node, bufnr)
+        vim.notify(firstobj or "")
+        local resp = {
+            listdf = 1,
+            -- TODO: fix this hardcoded function name
+            fnm = "NULL",
+            firstobj = firstobj,
+            argname_ok = argname_ok,
+        }
+        return resp
+    end
+
     lib, funname = get_pkg_and_funname(call_node, bufnr)
     firstobj = find_call_dataframe(call_node, bufnr)
 
