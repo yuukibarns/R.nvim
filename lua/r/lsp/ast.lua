@@ -31,12 +31,13 @@ end
 ---@param col integer 0-indexed column
 ---@return TSNode?
 function M.node_at_position(bufnr, row, col)
-    local _, root = M.get_parser_and_root(bufnr)
-    if not root then
-        return nil
-    end
-
-    return root:descendant_for_range(row, col, row, col)
+    -- Prefer injected-language aware lookup
+    local node = vim.treesitter.get_node({
+        bufnr = bufnr,
+        pos = { row, col },
+        ignore_injections = false,
+    })
+    return node
 end
 
 --- Walk up tree to find ancestor of type
@@ -118,26 +119,11 @@ function M.get_children_of_type(node, child_type)
     return children
 end
 
----@param value_node TSNode
----@param bufnr integer
-function M.extract_obj_from_value(value_node, bufnr)
-    if not value_node then return nil end
-    local t = value_node:type()
-    if t == "identifier"
-        or t == "dots"
-        or t == "subset"
-        or t == "namespace_get"
-        or t == "namespace_get_internal" then
-        return vim.treesitter.get_node_text(value_node, bufnr)
-    end
-    return nil
-end
-
 --- Extract first argument from call node using tree-sitter query
----@param bufnr integer Buffer number
 ---@param call_node TSNode Call node
+---@param bufnr integer Buffer number
 ---@return string? Argument text
-function M.get_first_call_argument(bufnr, call_node)
+function M.get_first_call_argument(call_node, bufnr)
     if call_node:type() ~= "call" then
         return nil
     end
@@ -170,7 +156,7 @@ function M.get_first_call_argument(bufnr, call_node)
                 if name_node and value_node then
                     local arg_name = vim.treesitter.get_node_text(name_node, bufnr)
                     if arg_name == "data" then
-                        local data_obj = M.extract_obj_from_value(value_node, bufnr)
+                        local data_obj = vim.treesitter.get_node_text(value_node, bufnr)
                         if data_obj then
                             firstobj = data_obj
                             break
@@ -183,7 +169,7 @@ function M.get_first_call_argument(bufnr, call_node)
 
     -- Fallback to first positional arg
     if not firstobj and first_positional_value then
-        firstobj = M.extract_obj_from_value(first_positional_value, bufnr)
+        firstobj = vim.treesitter.get_node_text(first_positional_value, bufnr)
     end
 
     return firstobj

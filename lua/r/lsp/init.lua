@@ -15,47 +15,103 @@ local M = {}
 
 local ast = require("r.lsp.ast")
 
-local get_piped_obj
+---Return object piped through either `|>` or `%>%`
+---@param call_node TSNode
+---@param bufnr integer
+---@return string?
+local function find_piped_dataframe(call_node, bufnr)
+    if not call_node then
+        return nil
+    end
+
+    local function trim(s)
+        return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+    end
+
+    local function get_pipe_lhs(binop)
+        if not binop or binop:type() ~= "binary_operator" then
+            return nil
+        end
+
+        local lhs = binop:field("lhs")[1]
+        local rhs = binop:field("rhs")[1]
+        if not lhs or not rhs then
+            return nil
+        end
+
+        local _, _, lhs_erow, lhs_ecol = lhs:range()
+        local rhs_srow, rhs_scol, _, _ = rhs:range()
+
+        local between = table.concat(vim.api.nvim_buf_get_text(
+            bufnr,
+            lhs_erow, lhs_ecol,
+            rhs_srow, rhs_scol,
+            {}
+        ), "\n")
+
+        between = trim(between or "")
+
+        if between == "|>" or between == "%>%" then
+            return lhs
+        end
+
+        return nil
+    end
+
+    -- Start from parent of the call node.
+    local parent = call_node:parent()
+    local current = get_pipe_lhs(parent)
+    if not current then return nil end
+
+    -- Walk left through chained pipes until the source object.
+    while current do
+        if current:type() == "identifier" then
+            return vim.treesitter.get_node_text(current, bufnr)
+        end
+
+        current = get_pipe_lhs(current)
+    end
+
+    return nil
+end
+
+---Return dataframe of function call.
+---@param call_node TSNode
+---@param bufnr integer
+---@return string?
+local function find_call_dataframe(call_node, bufnr)
+    if call_node:type() == "subset" then
+        local fn_expr = call_node:field("function")[1]
+        if not fn_expr then return end
+        local df = vim.treesitter.get_node_text(fn_expr, bufnr)
+        return df
+    end
+
+    local piped_df = find_piped_dataframe(call_node, bufnr)
+    if piped_df then
+        return piped_df
+    else
+        local df = ast.get_first_call_argument(call_node, bufnr)
+        return df
+    end
+end
 
 ---Find parent function's dataframe by using Treesitter to traverse the AST
 ---@param parent_fn string The parent function to look for (e.g., "ggplot")
----@param lnum integer Current line number (1-indexed)
----@return string | nil The dataframe name if found
-local function find_ggplot_dataframe(parent_fn, lnum)
-    local bufnr = vim.api.nvim_get_current_buf()
-    local row = math.max(lnum - 1, 0)
-    local col = 0
-
-    -- Prefer injected-language aware lookup
-    local node = vim.treesitter.get_node({
-        bufnr = bufnr,
-        pos = { row, col },
-        ignore_injections = false,
-    })
-    if not node then return nil end
-
+---@param call_node TSNode
+---@param bufnr integer
+---@return string?
+local function find_ggplot_dataframe(parent_fn, call_node, bufnr)
     -- Walk up the tree to find the binary_operator chain (ggplot + layers)
     ---@type TSNode?
-    local current = node
+    local current = call_node
     while current do
         if current:type() == "binary_operator" then
             -- Found a + chain, search for the parent function using ast utility
-            local call_node = ast.find_call_in_chain(bufnr, current, parent_fn)
-            if call_node then
-                -- Found the parent function, extract first argument using ast utility
-                local firstobj = ast.get_first_call_argument(bufnr, call_node)
-                if firstobj then return firstobj end
-
-                -- Check for piped data before the call
-                local call_start_row = call_node:start()
-                local line = vim.api.nvim_buf_get_lines(
-                    bufnr,
-                    call_start_row,
-                    call_start_row + 1,
-                    true
-                )[1]
-                local pobj = get_piped_obj(line, call_start_row + 1)
-                if pobj then return pobj end
+            local parent_fn_node = ast.find_call_in_chain(bufnr, current, parent_fn)
+            if parent_fn_node then
+                local df = find_call_dataframe(parent_fn_node, bufnr)
+                return df
             end
         end
         current = current:parent()
@@ -64,126 +120,62 @@ local function find_ggplot_dataframe(parent_fn, lnum)
     return nil
 end
 
----Return object piped through either `|>` or `%>%`
----@param line string | nil
----@param lnum integer
----@return string | nil
-get_piped_obj = function(line, lnum)
-    local l
-    l = vim.fn.getline(lnum - 1)
-    if l then
-        if l:find("|>%s*$") then return get_piped_obj(l, lnum - 1) end
-        if l:find("%%>%%%s*$") then return get_piped_obj(l, lnum - 1) end
-    end
-    if line then
-        if line:find("|>") then return line:match(".-([%w%._]+)%s*|>") end
-        if line:find("%%>%%") then return line:match(".-([%w%._]+)%s*%%>%%") end
-    end
-    return nil
-end
-
----Return first data object of function call.
----Priority:
----  1) named argument `data = <obj>`
----  2) first positional argument
----@param line string
----@param lnum integer
-local get_first_obj = function(line, lnum)
-    local bufnr = vim.api.nvim_get_current_buf()
-    local row = math.max(lnum - 1, 0)
-    local col = math.max(#line - 1, 0)
-
-    -- Prefer injected-language aware lookup
-    local node = vim.treesitter.get_node({
-        bufnr = bufnr,
-        pos = { row, col },
-        ignore_injections = false,
-    })
-
-    if not node then
-        return nil, nil, nil, line, lnum, nil
-    end
-
-    -- Walk up to enclosing call OR subset (e.g. dt[...])
-    local call_node
-    if node:type() == "call" or node:type() == "subset" then
-        call_node = node
-    else
-        call_node = ast.find_ancestor(node, "call") or ast.find_ancestor(node, "subset")
-    end
-    if not call_node then
-        return nil, nil, nil, line, lnum, nil
-    end
-
-    -- Function extraction
+---@param call_node TSNode
+---@param bufnr integer
+---@return string?, string?
+local function get_pkg_and_funname(call_node, bufnr)
     local fn_expr = call_node:field("function")[1]
-    if not fn_expr then
-        return nil, nil, nil, line, lnum, nil
-    end
+    if not fn_expr then return end
 
     local pkg, funname
-    local fn_text = vim.treesitter.get_node_text(fn_expr, bufnr)
 
     if fn_expr:type() == "identifier" then
-        funname = fn_text
-    else
-        local p, f = fn_text:match("^([%w%._]+)%s*:::%s*([%w%._]+)$")
-        if not p then p, f = fn_text:match("^([%w%._]+)%s*::%s*([%w%._]+)$") end
-        if p and f then
-            pkg, funname = p, f
-        else
-            funname = fn_text and fn_text:match("([%w%._]+)%s*$") or nil
-        end
+        funname = vim.treesitter.get_node_text(fn_expr, bufnr)
+    elseif fn_expr:type() == "namespace_operator" then
+        local lhs = fn_expr:field("lhs")[1]
+        local rhs = fn_expr:field("rhs")[1]
+        pkg = vim.treesitter.get_node_text(lhs, bufnr)
+        funname = vim.treesitter.get_node_text(rhs, bufnr)
     end
-
-    if not funname then
-        return nil, nil, nil, line, lnum, nil
-    end
-
-    -- "1" => suggest argument names
-    -- "0" => do not suggest argument names
-    local last_comma = line:find(",[^,]*$") or 0
-    local last_equal = line:find("=[^=]*$") or 0
-    local last_bracket = line:find("%([^(]*$") or 0
-
-    local argname_ok = (last_equal > last_comma and last_equal > last_bracket) and "0" or "1"
-
-
-    -- Special case: subset syntax dt[...] => firstobj is function field ("dt")
-    if call_node:type() == "subset" then
-        local sr, sc = call_node:start()
-        local call_line = vim.api.nvim_buf_get_lines(bufnr, sr, sr + 1, true)[1] or line
-        local firstobj = ast.extract_obj_from_value(fn_expr, bufnr) or fn_text
-        return nil, "data.table", firstobj, call_line, sr + 1, sc, argname_ok
-    end
-
-    local firstobj = ast.get_first_call_argument(bufnr, call_node)
-
-    -- Compatibility return values
-    local sr, sc = call_node:start()
-    local call_line = vim.api.nvim_buf_get_lines(bufnr, sr, sr + 1, true)[1] or line
-
-    return pkg, funname, firstobj, call_line, sr + 1, sc, argname_ok
+    return pkg, funname
 end
 
 ---Check if we need to complete function arguments
 ---@param line string
 ---@param lnum integer
+---@return table?
 local need_R_args = function(line, lnum)
     local funname = nil
     local firstobj = nil
     local funname2 = nil
     local firstobj2 = nil
     local listdf = nil
-    local nline = nil
-    local nlnum = nil
-    local cnum = nil
     local lib = nil
-    local argname_ok = nil
-    lib, funname, firstobj, nline, nlnum, cnum, argname_ok = get_first_obj(line, lnum + 1)
 
-    -- Save original nlnum for formula search (before fun_data_2 modifies it)
-    local orig_nlnum = nlnum
+    -- "1" => suggest argument names
+    -- "0" => do not suggest argument names
+    local last_comma = line:find(",[^,]*$") or 0
+    local last_equal = line:find("=[^=]*$") or 0
+    local last_bracket = line:find("%([^(]*$") or 0
+    local argname_ok = (last_equal > last_comma and last_equal > last_bracket) and "0" or "1"
+
+    local bufnr = vim.api.nvim_get_current_buf()
+    local row = math.max(lnum, 0)
+    local col = math.max(#line - 1, 0)
+
+    local node = ast.node_at_position(bufnr, row, col)
+    if not node then return end
+
+    local call_node
+    if node:type() == "call" or node:type() == "subset" then
+        call_node = node
+    else
+        call_node = ast.find_ancestor(node, { "call", "subset" })
+    end
+    if not call_node then return end
+
+    lib, funname = get_pkg_and_funname(call_node, bufnr)
+    firstobj = find_call_dataframe(call_node, bufnr)
 
     -- Check if this is a function for which we expect to complete data frame column names
     if funname then
@@ -195,19 +187,24 @@ local need_R_args = function(line, lnum)
             end
         end
 
-        -- Check if the data.frame is supposed to be the first argument of the
+        -- Check if the dataframe is supposed to be the first argument of the
         -- nesting function:
-        if not listdf and cnum > 1 then
-            nline = string.sub(nline, 1, cnum)
-            for k, v in pairs(options.fun_data_2) do
-                for _, a in pairs(v) do
-                    if a == "*" or funname == a then
-                        _, funname2, firstobj2, nline, nlnum, _, _ =
-                            get_first_obj(nline, nlnum)
-                        if funname2 == k then
-                            firstobj = firstobj2
-                            listdf = 2
-                            break
+        if not listdf then
+            local call_node2 = ast.find_ancestor(call_node, { "call", "subset" })
+            if call_node2 then
+                for k, v in pairs(options.fun_data_2) do
+                    for _, a in pairs(v) do
+                        if a == "*" or funname == a then
+                            _, funname2 = get_pkg_and_funname(call_node2, bufnr)
+                            if funname2 == k then
+                                local df = find_call_dataframe(call_node2, bufnr)
+                                if df then
+                                    firstobj2 = df
+                                    firstobj = firstobj2
+                                    listdf = 2
+                                    break
+                                end
+                            end
                         end
                     end
                 end
@@ -221,7 +218,7 @@ local need_R_args = function(line, lnum)
                 for _, fn in pairs(formula_fns) do
                     if fn == funname then
                         -- Found matching function, now find parent's dataframe
-                        local df = find_ggplot_dataframe(parent_fn, orig_nlnum)
+                        local df = find_ggplot_dataframe(parent_fn, call_node, bufnr)
                         if df then
                             firstobj = df
                             listdf = 3
@@ -234,23 +231,13 @@ local need_R_args = function(line, lnum)
         end
     end
 
-    -- Check if the first object was piped
-    local pobj = get_piped_obj(nline, nlnum)
-    if pobj then
-        firstobj = pobj
-        if listdf == 2 then
-            firstobj2 = pobj
-        end
-    end
-    local resp
-    resp = {
+    local resp = {
         lib = lib,
         fnm = funname,
         fnm2 = funname2,
         firstobj = firstobj,
         listdf = listdf,
         firstobj2 = firstobj2,
-        pobj = pobj,
         argname_ok = argname_ok,
     }
     return resp
@@ -487,7 +474,7 @@ function M.complete(req_id, lnum, cnum)
     local nra
     nra = need_R_args(cline:sub(1, cnum), lnum)
 
-    if nra.fnm then
+    if nra and nra.fnm then
         -- We are passing arguments for a function.
 
         -- Special completion for library and require
@@ -533,11 +520,7 @@ function M.complete(req_id, lnum, cnum)
                     if nra.listdf == 1 or nra.listdf == 3 then
                         msg = msg .. ", df = '" .. nra.firstobj .. "'"
                     elseif nra.listdf == 2 then
-                        if nra.firstobj2 then
-                            msg = msg .. ", df = '" .. nra.firstobj2 .. "'"
-                        elseif nra.firstobj then
-                            msg = msg .. ", df = '" .. nra.firstobj .. "'"
-                        end
+                        msg = msg .. ", df = '" .. nra.firstobj2 .. "'"
                     end
                 end
                 if nra.argname_ok then msg = msg .. ", argname_ok = '" .. nra.argname_ok .. "'" end
