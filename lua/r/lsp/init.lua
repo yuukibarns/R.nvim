@@ -80,7 +80,7 @@ end
 ---@param bufnr integer
 ---@return string?
 local function find_call_dataframe(call_node, bufnr)
-    if call_node:type() == "subset" then
+    if call_node:type() == "subset" or call_node:type() == "subset2" then
         local fn_expr = call_node:field("function")[1]
         if not fn_expr then return end
         local df = vim.treesitter.get_node_text(fn_expr, bufnr)
@@ -137,6 +137,10 @@ local function get_pkg_and_funname(call_node, bufnr)
         pkg = vim.treesitter.get_node_text(lhs, bufnr)
         funname = vim.treesitter.get_node_text(rhs, bufnr)
     end
+
+    if call_node:type() == "subset" then
+        funname = "subset"
+    end
     return pkg, funname
 end
 
@@ -170,19 +174,30 @@ local need_R_args = function(line, lnum)
     if node:type() == "call" or node:type() == "subset" then
         call_node = node
     else
-        call_node = ast.find_ancestor(node, { "call", "subset" })
+        call_node = ast.find_ancestor(node, { "call", "subset", "subset2" })
     end
     if not call_node then return end
 
-    if call_node:type() == "subset" then
+    if call_node:type() == "subset2" then
         firstobj = find_call_dataframe(call_node, bufnr)
-        vim.notify(firstobj or "")
         local resp = {
             listdf = 1,
             -- TODO: fix this hardcoded function name
             fnm = "NULL",
             firstobj = firstobj,
-            argname_ok = argname_ok,
+            argname_ok = "0",
+            subset2 = true,
+        }
+        return resp
+    end
+    if call_node:type() == "subset" then
+        firstobj = find_call_dataframe(call_node, bufnr)
+        local resp = {
+            listdf = 1,
+            -- TODO: fix this hardcoded function name
+            fnm = "NULL",
+            firstobj = firstobj,
+            argname_ok = "0",
         }
         return resp
     end
@@ -498,7 +513,7 @@ function M.complete(req_id, lnum, cnum)
             return
         end
 
-        if snm == "rString" then
+        if snm == "rString" and not nra.subset2 then
             M.send_msg({ code = "E" .. req_id })
             return
         end
@@ -526,7 +541,7 @@ function M.complete(req_id, lnum, cnum)
                     nra.fnm,
                     nra.firstobj
                 )
-                if wrd then msg = msg .. ", '" .. wrd .. "'" end
+                if wrd and not nra.subset2 then msg = msg .. ", '" .. wrd .. "'" end
                 if nra.lib then msg = msg .. ", lib = '" .. nra.lib .. "'" end
                 if nra.listdf then
                     if nra.listdf == 1 or nra.listdf == 3 then
